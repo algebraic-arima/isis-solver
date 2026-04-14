@@ -66,7 +66,6 @@ impl ColMatrixModQ {
         out
     }
 
-    /// Same as linear_combine_01, but takes a bit-vector selector.
     pub fn linear_combine_01_bits(
         &self,
         selector: &BitVec<usize, Lsb0>,

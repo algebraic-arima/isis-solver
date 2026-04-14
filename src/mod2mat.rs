@@ -7,16 +7,41 @@ use crate::mat::ColMatrixModQ;
 #[allow(non_camel_case_types)]
 #[derive(Debug, Clone)]
 pub struct mod2matrix {
-    pub data: Vec<BitVec<usize, Lsb0>>, // a row is a bitvec
+    pub data: BitVec<usize, Lsb0>, // row-major
     pub row: usize,
     pub col: usize,
 }
 
 impl mod2matrix {
+    #[inline]
+    fn index_of(&self, r: usize, c: usize) -> usize {
+        r * self.col + c
+    }
+
+    fn swap_rows(&mut self, r1: usize, r2: usize) {
+        if r1 == r2 {
+            return;
+        }
+        for c in 0..self.col {
+            let i1 = self.index_of(r1, c);
+            let i2 = self.index_of(r2, c);
+            self.data.swap(i1, i2);
+        }
+    }
+
+    fn xor_row_from_col(&mut self, target: usize, source: usize, from_col: usize) {
+        for c in from_col..self.col {
+            let ti = self.index_of(target, c);
+            let si = self.index_of(source, c);
+            let next = self.data[ti] ^ self.data[si];
+            self.data.set(ti, next);
+        }
+    }
+
     pub fn new(row: usize) -> Self {
         let col = row * 2 + 1;
         Self {
-            data: (0..row).map(|_| bitvec![usize, Lsb0; 0; col]).collect(),
+            data: bitvec![usize, Lsb0; 0; row * col],
             row,
             col,
         }
@@ -29,13 +54,11 @@ impl mod2matrix {
         if mat.q != 2 {
             panic!("Input matrix modulus must be 2");
         }
-        let mut data = Vec::with_capacity(mat.row);
+        let mut data = bitvec![usize, Lsb0; 0; mat.row * mat.col];
         for r in 0..mat.row {
-            let mut row_vec = bitvec![usize, Lsb0; 0; mat.col];
             for c in 0..mat.col {
-                row_vec.set(c, mat.data[c * mat.row + r] % 2 == 1);
+                data.set(r * mat.col + c, mat.data[c * mat.row + r] % 2 == 1);
             }
-            data.push(row_vec);
         }
         Self {
             data,
@@ -52,11 +75,14 @@ impl mod2matrix {
             panic!("All rows must have the same length");
         }
 
-        Self {
-            data: rows,
-            row,
-            col,
+        let mut data = bitvec![usize, Lsb0; 0; row * col];
+        for (r, row_bits) in rows.into_iter().enumerate() {
+            for c in 0..col {
+                data.set(r * col + c, row_bits[c]);
+            }
         }
+
+        Self { data, row, col }
     }
 
     pub fn set(&mut self, r: usize, c: usize, value: bool) {
@@ -66,21 +92,22 @@ impl mod2matrix {
                 r, c, self.row, self.col
             );
         }
-        self.data[r].set(c, value);
+        let i = self.index_of(r, c);
+        self.data.set(i, value);
     }
 
     pub fn get(&self, r: usize, c: usize) -> bool {
         if r >= self.row || c >= self.col {
             panic!("Index out of bounds");
         }
-        self.data[r][c]
+        self.data[self.index_of(r, c)]
     }
 
     pub fn append_row(&mut self, row: BitVec<usize, Lsb0>) {
         if row.len() != self.col {
             panic!("Row length does not match matrix width");
         }
-        self.data.push(row);
+        self.data.extend_from_bitslice(row.as_bitslice());
         self.row += 1;
     }
 
@@ -93,19 +120,13 @@ impl mod2matrix {
                 break;
             }
 
-            let pivot = (rank..mat.row).find(|&r| mat.data[r][col]);
+            let pivot = (rank..mat.row).find(|&r| mat.get(r, col));
             if let Some(pivot_row) = pivot {
-                if pivot_row != rank {
-                    mat.data.swap(rank, pivot_row);
-                }
+                mat.swap_rows(rank, pivot_row);
 
-                let pivot_snapshot = mat.data[rank].clone();
                 for r in 0..mat.row {
-                    if r != rank && mat.data[r][col] {
-                        for c in col..mat.col {
-                            let next = mat.data[r][c] ^ pivot_snapshot[c];
-                            mat.data[r].set(c, next);
-                        }
+                    if r != rank && mat.get(r, col) {
+                        mat.xor_row_from_col(r, rank, col);
                     }
                 }
 
@@ -143,25 +164,18 @@ impl mod2matrix {
                 break;
             }
 
-            if let Some(i) = (pivot_row..self.row).find(|&r| mat.data[r][col]) {
-                mat.data.swap(pivot_row, i);
+            if let Some(i) = (pivot_row..self.row).find(|&r| mat.get(r, col)) {
+                mat.swap_rows(pivot_row, i);
                 b.swap(pivot_row, i);
 
-                let (upper, lower) = mat.data.split_at_mut(pivot_row + 1);
-                let (b_upper, b_lower) = b.split_at_mut(pivot_row + 1);
-
-                let r_p = &upper[pivot_row];
-                let b_p = b_upper[pivot_row];
-
-                lower
-                    .iter_mut()
-                    .zip(b_lower.iter_mut())
-                    .for_each(|(row, mut row_b)| {
-                        if row[col] {
-                            *row ^= r_p;
-                            *row_b ^= b_p;
-                        }
-                    });
+                let b_p = b[pivot_row];
+                for r in (pivot_row + 1)..self.row {
+                    if mat.get(r, col) {
+                        mat.xor_row_from_col(r, pivot_row, col);
+                        let br = b[r];
+                        b.set(r, br ^ b_p);
+                    }
+                }
 
                 pivot_pos[pivot_row] = Some(col);
                 pivot_row += 1;
@@ -173,9 +187,10 @@ impl mod2matrix {
         for i in (0..pivot_row).rev() {
             if let Some(c) = pivot_pos[i] {
                 // Σ (mat[i][j] * x[j]) for j > c
-                let sum = (mat.data[i][c + 1..].iter().by_vals())
-                    .zip(x[c + 1..].iter().by_vals())
-                    .fold(false, |acc, (m, xi)| acc ^ (m & xi));
+                let mut sum = false;
+                for j in (c + 1)..self.col {
+                    sum ^= mat.get(i, j) & x[j];
+                }
 
                 x.set(c, b[i] ^ sum);
             } else {
@@ -245,25 +260,18 @@ impl mod2matrix {
                 break;
             }
 
-            if let Some(i) = (pivot_row..self.row).find(|&r| mat.data[r][col]) {
-                mat.data.swap(pivot_row, i);
+            if let Some(i) = (pivot_row..self.row).find(|&r| mat.get(r, col)) {
+                mat.swap_rows(pivot_row, i);
                 b.swap(pivot_row, i);
 
-                let (upper, lower) = mat.data.split_at_mut(pivot_row + 1);
-                let (b_upper, b_lower) = b.split_at_mut(pivot_row + 1);
-
-                let r_p = &upper[pivot_row];
-                let b_p = b_upper[pivot_row];
-
-                lower
-                    .iter_mut()
-                    .zip(b_lower.iter_mut())
-                    .for_each(|(row, mut row_b)| {
-                        if row[col] {
-                            *row ^= r_p;
-                            *row_b ^= b_p;
-                        }
-                    });
+                let b_p = b[pivot_row];
+                for r in (pivot_row + 1)..self.row {
+                    if mat.get(r, col) {
+                        mat.xor_row_from_col(r, pivot_row, col);
+                        let br = b[r];
+                        b.set(r, br ^ b_p);
+                    }
+                }
 
                 pivot_pos[pivot_row] = Some(col);
                 pivot_row += 1;
@@ -279,12 +287,12 @@ impl mod2matrix {
                 let mut sum = false;
                 for j in c + 1..self.col {
                     if vis[j] {
-                        sum ^= mat.data[i][j] & x[j];
+                        sum ^= mat.get(i, j) & x[j];
                     } else {
                         assert!(j == c + 1);
                         x.set(j, false);
                         vis.set(j, true);
-                        sum ^= mat.data[i][j] & x[j];
+                        sum ^= mat.get(i, j) & x[j];
                     }
                 }
                 x.set(c, b[i] ^ sum);
@@ -301,12 +309,12 @@ impl mod2matrix {
                 let mut sum = false;
                 for j in c + 1..self.col {
                     if vis[j] {
-                        sum ^= mat.data[i][j] & y[j];
+                        sum ^= mat.get(i, j) & y[j];
                     } else {
                         assert!(j == c + 1);
                         y.set(j, true);
                         vis.set(j, true);
-                        sum ^= mat.data[i][j] & y[j];
+                        sum ^= mat.get(i, j) & y[j];
                     }
                 }
                 y.set(c, b[i] ^ sum);
@@ -349,7 +357,7 @@ impl fmt::Display for mod2matrix {
         for r in 0..self.row {
             write!(f, "[ ")?;
             for c in 0..self.col {
-                write!(f, "{} ", if self.data[r][c] { 1 } else { 0 })?;
+                write!(f, "{} ", if self.get(r, c) { 1 } else { 0 })?;
             }
             writeln!(f, "]")?;
         }
