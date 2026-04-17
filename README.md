@@ -1,8 +1,8 @@
 # ISIS solver
 
-This is an implementation of the following algorithm which solves the subset-sum problem in the group $\mathbb{Z}_q^n$ for $q=2^l$ and $m=(2n+1)^l$ in time $O(n^2m)=2^{O(\log n\log q)}$, with aborting probability $\operatorname{negl}(n)$ if  $A$ and $y$ are randomly chosen. This algorithm uses $m-nl$ random bits, and is randomness recoverable.
+This is an implementation of the following algorithm which solves the subset-sum problem in the group $\mathbb{Z}_q^n$ for $q=2^l$ and $m=(2n+1)^l$ in time $O(n^2m)=2^{O(\log n\log q)}$, with aborting probability $\mathrm{negl}(n)$ if $A$ and $y$ are randomly chosen. This algorithm uses $m-nl$ random bits, and is randomness recoverable.
 
-$$
+<!-- $$
 \begin{array}{l}
 \mathbf{Algorithm}\ \mathcal{A}(A, y, l, n,q): \\
 \quad \textbf{if } l = 1,\;q=2,\;m=2n+1 \textbf{ then} \\
@@ -28,7 +28,9 @@ $$
 \quad \quad x' \leftarrow \mathcal{A}(A', y', l-1, n, q/2). \\
 \quad \quad \text{Return } \left[\begin{matrix}x_1+x'_1z_1\\\vdots\\x_{m'}+x'_{m'}z_{m'}\end{matrix}\right]. \\
 \end{array}
-$$
+$$ -->
+
+![pseudocode](image.png)
 
 The procedure $P1$ is a deterministic procedure that extends a full row-rank matrix $A\in\mathbb{Z}_2^{r\times m}$ to another full row-rank matrix $\tilde{A}\in\mathbb{Z}_2^{n\times m}$ by adding $n-r$ rows of unit vectors to $A$.
 
